@@ -1,0 +1,50 @@
+name: update-node-pool
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"   # 每30分钟
+  workflow_dispatch:          # 支持手动触发
+
+concurrency:
+  group: pool-update
+  cancel-in-progress: true    # 上一轮没跑完就取消，避免堆积
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install deps
+        run: pip install pyyaml
+
+      - name: Download clash-speedtest v1.8.8
+        run: |
+          curl -fsSL -o cst.tar.gz https://github.com/faceair/clash-speedtest/releases/download/v1.8.8/clash-speedtest_Linux_x86_64.tar.gz
+          tar -xzf cst.tar.gz
+          chmod +x clash-speedtest
+
+      - name: Fetch & merge sources
+        run: python scripts/fetch_merge.py --out pool.yaml
+
+      - name: Speed test (latency only)
+        run: ./clash-speedtest -c pool.yaml -fast -timeout 5s -max-latency 900ms -output tested.yaml
+
+      - name: Build publish config
+        run: python scripts/build_publish.py --in tested.yaml --out output/clash.yaml
+
+      - name: Commit & push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add output/clash.yaml
+          git diff --cached --quiet || git commit -m "update pool $(date -u '+%Y-%m-%d %H:%M') UTC"
+          git push
